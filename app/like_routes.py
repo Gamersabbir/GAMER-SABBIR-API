@@ -1,25 +1,34 @@
-
 from flask import Blueprint, request, jsonify
 import asyncio
 from datetime import datetime, timezone
 import logging
 import aiohttp 
 import requests 
-
+import json
 
 from .utils.protobuf_utils import encode_uid, decode_info, create_protobuf 
 from .utils.crypto_utils import encrypt_aes
 from .token_manager import get_headers 
+from config import CONFIG
 
 logger = logging.getLogger(__name__)
-
 like_bp = Blueprint('like_bp', __name__)
 
+# 🔧 সার্ভার কনফিগ লোড
+def load_server_configs():
+    servers = {}
+    for region, path in CONFIG.items():
+        try:
+            with open(path, "r") as f:
+                servers[region] = json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading config for {region}: {e}")
+    return servers
 
-_SERVERS = {}
+_SERVERS = load_server_configs()
 _token_cache = None
 
-
+# ✅ async POST রিকুয়েস্ট
 async def async_post_request(url: str, data: bytes, token: str):
     try:
         headers = get_headers(token)
@@ -30,6 +39,7 @@ async def async_post_request(url: str, data: bytes, token: str):
         logger.error(f"Async request failed: {str(e)}")
         return None
 
+# ✅ Sync POST রিকুয়েস্ট
 def make_request(uid_enc: str, url: str, token: str):
     data = bytes.fromhex(uid_enc)
     headers = get_headers(token)
@@ -43,9 +53,10 @@ def make_request(uid_enc: str, url: str, token: str):
         logger.error(f"Request error: {str(e)}")
         return None
 
+# ✅ Player Region Detect
 async def detect_player_region(uid: str):
-    for region_key, server_url in _SERVERS.items(): # Utilisez _SERVERS
-        tokens = _token_cache.get_tokens(region_key) # Utilisez _token_cache
+    for region_key, server_url in _SERVERS.items():
+        tokens = _token_cache.get_tokens(region_key)
         if not tokens:
             continue
 
@@ -57,24 +68,24 @@ async def detect_player_region(uid: str):
                 return region_key, player_info
     return None, None
 
+# ✅ Likes পাঠানো
 async def send_likes(uid: str, region: str):
-    tokens = _token_cache.get_tokens(region) # Utilisez _token_cache
-    like_url = f"{_SERVERS[region]}/LikeProfile" # Utilisez _SERVERS
+    tokens = _token_cache.get_tokens(region)
+    like_url = f"{_SERVERS[region]}/LikeProfile"
     encrypted = encrypt_aes(create_protobuf(uid, region))
-
     tasks = [async_post_request(like_url, bytes.fromhex(encrypted), token) for token in tokens]
     results = await asyncio.gather(*tasks)
-
     return {
         'sent': len(results),
         'added': sum(1 for r in results if r is not None)
     }
 
+# ✅ Like Route
 @like_bp.route("/like", methods=["GET"])
 async def like_player():
     try:
-        uid = request.args.get("uid")
-        if not uid or not uid.isdigit():
+        uid = request.args.get("uid", "").strip()
+        if not uid.isdigit():
             return jsonify({
                 "error": "Invalid UID",
                 "message": "Valid numeric UID required",
@@ -93,11 +104,11 @@ async def like_player():
 
         before_likes = player_info.AccountInfo.Likes
         player_name = player_info.AccountInfo.PlayerNickname
-        info_url = f"{_SERVERS[region]}/GetPlayerPersonalShow" 
+        info_url = f"{_SERVERS[region]}/GetPlayerPersonalShow"
 
         await send_likes(uid, region)
 
-        current_tokens = _token_cache.get_tokens(region) 
+        current_tokens = _token_cache.get_tokens(region)
         if not current_tokens:
             logger.error(f"No tokens available for {region} to verify likes after sending.")
             after_likes = before_likes
@@ -125,6 +136,7 @@ async def like_player():
             "credits": "https://t.me/nopethug"
         }), 500
 
+# ✅ হেলথচেক রাউট
 @like_bp.route("/health-check", methods=["GET"])
 def health_check():
     try:
@@ -147,18 +159,17 @@ def health_check():
             "credits": "https://t.me/nopethug"
         }), 500
 
+# ✅ রুট হোম পেজ
 @like_bp.route("/", methods=["GET"]) 
 async def root_home():
-    """
-    Route pour la page d'accueil principale de l'API (accessible via '/').
-    """
     return jsonify({
-        "message": "Api free fire like ",
+        "message": "Api free fire like",
         "credits": "https://t.me/nopethug",
     })
 
+# ✅ ইনিশিয়ালাইজ রাউট
 def initialize_routes(app_instance, servers_config, token_cache_instance):
     global _SERVERS, _token_cache 
-    _SERVERS = servers_config
+    _SERVERS = servers_config or load_server_configs()
     _token_cache = token_cache_instance
     app_instance.register_blueprint(like_bp)
