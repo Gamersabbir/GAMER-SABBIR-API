@@ -1,6 +1,15 @@
-from app import app as application
+from app.like_routes import initialize_routes
+from app.token_manager import TokenCache
+from config import CONFIG
 
-if __name__ == '__main__':
-    import os
-    port = int(os.environ.get("PORT", 5000))
-    application.run(host="0.0.0.0", port=port, threaded=True)
+app = Flask(__name__)
+
+# 🔧 Load server configs manually (for safety)
+from app.like_routes import load_server_configs
+servers_config = load_server_configs()
+
+# 🔐 Token Cache
+token_cache = TokenCache(servers_config)
+
+# 🔁 Initialize API Routes
+initialize_routes(app, servers_config, token_cache)
